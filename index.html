@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Drug Discovery Platform</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <script src="/static/js/animations.js" defer></script>
+    <script src="/static/js/viewer-enhancements.js" defer></script>
+    <script src="/static/js/main-enhancements.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ngl/2.0.0-dev.37/ngl.min.js"></script>
+    <style>
+
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: auto; }
+        #loading { display: none; margin-top: 20px; }
+        #error { color: red; margin-top: 20px; }
+        .function-details ul { list-style-type: none; padding: 0; }
+        .function-details ul li { margin-bottom: 10px; }
+        .references a { margin-right: 5px; }
+        #viewer, #viewer3D { width: 400px; height: 400px; margin-top: 20px; position: relative; border: 1px solid red; }
+        .copy-btn, .optimize-btn, .molstar-btn, .style-btn { margin-left: 5px; padding: 2px 5px; cursor: pointer; background-color: #f0f0f0; border: 1px solid #ccc; border-radius: 3px; }
+        .copy-btn:hover, .optimize-btn:hover, .molstar-btn:hover, .style-btn:hover { background-color: #e0e0e0; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        #styleControls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Drug Discovery Platform</h1>
+        <input type="text" id="proteinId" placeholder="Enter Protein ID or Common Name (e.g., EGFR)">
+        <button onclick="loadTarget()">Search Target</button>
+        <button onclick="loadCompounds()">Load Compounds</button>
+
+        <div id="loading">Loading...</div>
+        <div id="error"></div>
+
+        <div id="targetInfo"></div>
+
+        <table id="compoundsTable" class="display">
+            <thead>
+                <tr>
+                    <th>ChEMBL ID</th>
+                    <th>SMILES</th>
+                    <th>PDB ID</th>
+                    <th>Type</th>
+                    <th>Value</th>
+                    <th>Molecular Mass</th>
+                    <th>LogP</th>
+                    <th>3D Structure</th>
+                    <th>Optimize</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+
+        <div id="optimizationResults" style="margin-top: 20px;"></div>
+
+        <div id="viewer"></div>
+
+        <div style="margin-top: 20px;">
+            <input type="text" id="smilesInput" placeholder="Enter SMILES for 3D View">
+            <button onclick="view3DBySmiles()">View 3D</button>
+        </div>
+        <div id="viewer3D"></div>
+
+        <div id="styleControls">
+            <!-- Small Molecule Styles -->
+            <button class="style-btn" onclick="setNGLStyle('ball+stick')">Ball & Stick</button>
+            <button class="style-btn" onclick="setNGLStyle('spacefill')">Spacefill</button>
+            <button class="style-btn" onclick="setNGLStyle('licorice')">Licorice</button>
+            <button class="style-btn" onclick="setNGLStyle('hyperball')">Hyperball</button>
+            <button class="style-btn" onclick="setNGLStyle('line')">Line</button>
+            <button class="style-btn" onclick="setNGLStyle('stick')">Stick</button>
+
+            <!-- Surface Options -->
+            <button class="style-btn" onclick="addSurface('vdw')">VDW Surface</button>
+            <button class="style-btn" onclick="addSurface('sas')">SAS Surface</button>
+            <button class="style-btn" onclick="addSurface('ses')">SES Surface</button>
+            <button class="style-btn" onclick="removeSurface()">Remove Surface</button>
+
+            <!-- Measurements -->
+            <button class="style-btn" onclick="measureNGLDistance()">Measure Distance</button>
+            <button class="style-btn" onclick="measureNGLAngle()">Measure Angle</button>
+            <button class="style-btn" onclick="measureNGLDihedral()">Measure Dihedral</button>
+
+            <!-- Advanced Controls -->
+            <button class="style-btn" onclick="toggleLabels()">Toggle Atom Labels</button>
+            <button class="style-btn" onclick="zoomIn()">Zoom In</button>
+            <button class="style-btn" onclick="zoomOut()">Zoom Out</button>
+            <button class="style-btn" onclick="toggleSpin()">Toggle Spin</button>
+            <button class="style-btn" onclick="setColorScheme('element')">Color by Element</button>
+            <button class="style-btn" onclick="setColorScheme('hydrophobicity')">Color by Hydrophobicity</button>
+            <button class="style-btn" onclick="toggleBackground()">Toggle Background</button>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+
+    <script>
+        let stage;
+        let stage3D;
+        let spinning = true;
+        let labelsVisible = false;
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+
+        function showError(message) {
+            document.getElementById('error').textContent = message;
+        }
+
+        function copyToClipboard(text) {
+            if (!navigator.clipboard) {
+                showError('Clipboard API not supported in this browser');
+                return;
+            }
+            navigator.clipboard.writeText(text)
+                .then(() => console.log('Copied:', text))
+                .catch(err => {
+                    console.error('Copy failed:', err);
+                    showError('Copy failed. Please copy manually.');
+                });
+        }
+
+        function viewInMolstar(uniprotId) {
+            const url = `https://molstar.org/viewer/?uniprot=${encodeURIComponent(uniprotId)}`;
+            window.open(url, '_blank');
+        }
+
+        async function loadTarget() {
+            const proteinId = document.getElementById('proteinId').value.trim();
+            if (!proteinId) {
+                showError('Please enter a protein ID or common name');
+                return;
+            }
+            showLoading(true);
+            showError('');
+            try {
+                const response = await fetch(`/api/target?proteinId=${encodeURIComponent(proteinId)}`);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Server error');
+                const targetDiv = document.getElementById('targetInfo');
+                targetDiv.innerHTML = `
+                    <h3>${data.protein_name}</h3>
+                    <p><strong>Accession:</strong> ${data.accession} <button class="molstar-btn" onclick="viewInMolstar('${data.accession}')">View in Mol*</button></p>
+                    <p><strong>Gene:</strong> ${data.gene_names}</p>
+                    <p><strong>Organism:</strong> ${data.organism}</p>
+                    <div class="function-details">
+                        <h4>Detailed Functions:</h4>
+                        <ul>
+                            ${data.functions.map(func => `
+                                <li>
+                                    ${func.description}
+                                    ${func.references?.length > 0 ? `
+                                        <div class="references">
+                                            <small>References: ${func.references.map(ref => `<a href="https://pubmed.ncbi.nlm.nih.gov/${ref}" target="_blank">PMID:${ref}</a>`).join(', ')}</small>
+                                        </div>
+                                    ` : ''}
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </div>
+                `;
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function loadCompounds() {
+            const proteinId = document.getElementById('proteinId').value.trim();
+            if (!proteinId) {
+                showError('Please search for a target first');
+                return;
+            }
+            showLoading(true);
+            showError('');
+            try {
+                const response = await fetch(`/api/chembl_leads?proteinId=${encodeURIComponent(proteinId)}`);
+                const data = await response.json();
+                if (!response.ok || !data.results) throw new Error(data.error || 'No compounds found');
+                $('#compoundsTable').DataTable({
+                    destroy: true,
+                    data: data.results,
+                    columns: [
+                        { data: 'chembl_id' },
+                        {
+                            data: 'smiles',
+                            render: function(data) {
+                                return `<span>${data} <button class="copy-btn" onclick="copyToClipboard('${data}')">Copy</button></span>`;
+                            }
+                        },
+                        {
+                            data: 'pdb_id',
+                            render: function(data) {
+                                return `<span>${data} <button class="copy-btn" onclick="copyToClipboard('${data}')">Copy</button></span>`;
+                            }
+                        },
+                        { data: 'type' },
+                        { data: 'value', render: (data, type, row) => `${data} ${row.units || ''}` },
+                        { data: 'molecular_mass' },
+                        { data: 'logp' },
+                        { data: 'sdf_file', render: (data) => `<button onclick="view3DStructure('/uploads/${data}')">View 3D</button>` },
+                        { data: null, render: (data, type, row) => `<button class="optimize-btn" data-smiles="${row.smiles}" data-ic50="${row.ic50_value}">Optimize</button>` }
+                    ],
+                    order: [[3, 'asc']]
+                });
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function view3DStructure(sdfUrl) {
+            console.log('Loading SDF from:', sdfUrl);
+            if (!stage) {
+                stage = new NGL.Stage('viewer', { backgroundColor: 'white' });
+            }
+            stage.removeAllComponents();
+            stage.loadFile(sdfUrl, { ext: 'sdf' }).then(function(component) {
+                component.addRepresentation('ball+stick');
+                component.autoView();
+                if (spinning) stage.animationControls.play({ direction: 'spin' });
+            }).catch(err => showError('Failed to load SDF: ' + err.message));
+        }
+
+        function setNGLStyle(style) {
+            if (!stage) return;
+            stage.eachComponent(function(component) {
+                component.removeAllRepresentations();
+                component.addRepresentation(style);
+                component.autoView();
+            });
+        }
+
+        function addSurface(type) {
+            if (!stage) return;
+            let surfaceParams;
+            switch (type) {
+                case 'vdw': surfaceParams = { surfaceType: 'vdw', opacity: 0.7, color: 'grey' }; break;
+                case 'sas': surfaceParams = { surfaceType: 'sas', opacity: 0.7, color: 'blue' }; break;
+                case 'ses': surfaceParams = { surfaceType: 'ses', opacity: 0.7, color: 'green' }; break;
+                default: return;
+            }
+            stage.eachComponent(function(component) {
+                component.addRepresentation('surface', surfaceParams);
+                component.autoView();
+            });
+        }
+
+        function removeSurface() {
+            if (!stage) return;
+            stage.eachComponent(function(component) {
+                component.removeRepresentation('surface');
+                component.autoView();
+            });
+        }
+
+        function measureNGLDistance() {
+            if (!stage) return;
+            alert('Click two atoms to measure distance. Result will be logged to console.');
+            stage.signals.clicked.add(function(pickingProxy) {
+                if (pickingProxy && pickingProxy.atom) {
+                    const selected = stage.compList[0].selection.atoms || [];
+                    if (selected.length === 2) {
+                        const pos1 = selected[0].globalposition;
+                        const pos2 = selected[1].globalposition;
+                        const distance = Math.sqrt(
+                            Math.pow(pos2.x - pos1.x, 2) +
+                            Math.pow(pos2.y - pos1.y, 2) +
+                            Math.pow(pos2.z - pos1.z, 2)
+                        );
+                        console.log('Distance:', distance.toFixed(2), 'Å');
+                        stage.compList[0].selection.clear();
+                    }
+                }
+            });
+        }
+
+        function measureNGLAngle() {
+            if (!stage) return;
+            alert('Click three atoms to measure angle. Result will be logged to console.');
+            stage.signals.clicked.add(function(pickingProxy) {
+                if (pickingProxy && pickingProxy.atom) {
+                    const selected = stage.compList[0].selection.atoms || [];
+                    if (selected.length === 3) {
+                        const pos1 = selected[0].globalposition;
+                        const pos2 = selected[1].globalposition;
+                        const pos3 = selected[2].globalposition;
+                        const v1 = { x: pos1.x - pos2.x, y: pos1.y - pos2.y, z: pos1.z - pos2.z };
+                        const v2 = { x: pos3.x - pos2.x, y: pos3.y - pos2.y, z: pos3.z - pos2.z };
+                        const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+                        const mag1 = Math.sqrt(v1.x * v1.x + v1.y * v1.y + v1.z * v1.z);
+                        const mag2 = Math.sqrt(v2.x * v2.x + v2.y * v2.y + v2.z * v2.z);
+                        const angle = Math.acos(dot / (mag1 * mag2)) * (180 / Math.PI);
+                        console.log('Angle:', angle.toFixed(2), 'degrees');
+                        stage.compList[0].selection.clear();
+                    }
+                }
+            });
+        }
+
+        function measureNGLDihedral() {
+            if (!stage) return;
+            alert('Click four atoms to measure dihedral angle. Result will be logged to console.');
+            stage.signals.clicked.add(function(pickingProxy) {
+                if (pickingProxy && pickingProxy.atom) {
+                    const selected = stage.compList[0].selection.atoms || [];
+                    if (selected.length === 4) {
+                        const pos1 = selected[0].globalposition;
+                        const pos2 = selected[1].globalposition;
+                        const pos3 = selected[2].globalposition;
+                        const pos4 = selected[3].globalposition;
+                        const v1 = { x: pos2.x - pos1.x, y: pos2.y - pos1.y, z: pos2.z - pos1.z };
+                        const v2 = { x: pos3.x - pos2.x, y: pos3.y - pos2.y, z: pos3.z - pos2.z };
+                        const v3 = { x: pos4.x - pos3.x, y: pos4.y - pos3.y, z: pos4.z - pos3.z };
+                        const n1 = {
+                            x: v1.y * v2.z - v1.z * v2.y,
+                            y: v1.z * v2.x - v1.x * v2.z,
+                            z: v1.x * v2.y - v1.y * v2.x
+                        };
+                        const n2 = {
+                            x: v2.y * v3.z - v2.z * v3.y,
+                            y: v2.z * v3.x - v2.x * v3.z,
+                            z: v2.x * v3.y - v2.y * v3.x
+                        };
+                        const dot = n1.x * n2.x + n1.y * n2.y + n1.z * n2.z;
+                        const mag1 = Math.sqrt(n1.x * n1.x + n1.y * n1.y + n1.z * n1.z);
+                        const mag2 = Math.sqrt(n2.x * n2.x + n2.y * n2.y + n2.z * n2.z);
+                        const dihedral = Math.acos(dot / (mag1 * mag2)) * (180 / Math.PI);
+                        console.log('Dihedral Angle:', dihedral.toFixed(2), 'degrees');
+                        stage.compList[0].selection.clear();
+                    }
+                }
+            });
+        }
+
+        function toggleLabels() {
+            if (!stage) return;
+            labelsVisible = !labelsVisible;
+            stage.eachComponent(function(component) {
+                if (labelsVisible) {
+                    component.addRepresentation('label', { labelType: 'atomname', color: 'white', radius: 0.5 });
+                } else {
+                    component.removeRepresentation('label');
+                }
+                component.autoView();
+            });
+        }
+
+        function zoomIn() {
+            if (!stage) return;
+            stage.viewer.zoom(-0.5);
+        }
+
+        function zoomOut() {
+            if (!stage) return;
+            stage.viewer.zoom(0.5);
+        }
+
+        function toggleSpin() {
+            if (!stage) return;
+            spinning = !spinning;
+            if (spinning) {
+                stage.animationControls.play({ direction: 'spin' });
+            } else {
+                stage.animationControls.pause();
+            }
+        }
+
+        function setColorScheme(scheme) {
+            if (!stage) return;
+            stage.eachComponent(function(component) {
+                component.eachRepresentation(function(rep) {
+                    rep.setParameters({ colorScheme: scheme });
+                });
+                component.autoView();
+            });
+        }
+
+        function toggleBackground() {
+            if (!stage) return;
+            const currentColor = stage.backgroundColor === 'white' ? 'black' : 'white';
+            stage.setParameters({ backgroundColor: currentColor });
+        }
+
+        $(document).on('click', '.optimize-btn', function() {
+            const smiles = $(this).data('smiles');
+            const ic50 = $(this).data('ic50');
+            optimizeLead(smiles, ic50);
+        });
+
+        async function optimizeLead(leadSmiles, leadIc50) {
+            const table = $('#compoundsTable').DataTable();
+            const allCompounds = table.rows().data().toArray().map(row => ({
+                smiles: row.smiles,
+                sdf_file: row.sdf_file,
+                pdb_id: row.pdb_id,
+                ic50_value: row.ic50_value
+            })).filter(c => c.smiles !== leadSmiles && c.ic50_value !== null);
+
+            showLoading(true);
+            showError('');
+            try {
+                const response = await fetch('/api/optimize', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ leadSmiles, leadIc50, allCompounds })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Optimization failed');
+                const resultsDiv = document.getElementById('optimizationResults');
+                resultsDiv.innerHTML = `
+                    <h3>Lead Optimization for ${leadSmiles}</h3>
+                    <p><strong>Lead Compound Properties:</strong></p>
+                    <ul>
+                        <li>Molecular Mass: ${data.properties.molecular_mass} Da</li>
+                        <li>LogP: ${data.properties.logP}</li>
+                        <li>Solubility (logS): ${data.properties.solubility}</li>
+                        <li>H-bond Donors: ${data.properties.hbd}</li>
+                        <li>H-bond Acceptors: ${data.properties.hba}</li>
+                        <li>PSA: ${data.properties.psa} Å²</li>
+                        <li>Rotatable Bonds: ${data.properties.rotatable_bonds}</li>
+                        <li>PDB ID: ${data.properties.pdb_id} <button class="copy-btn" onclick="copyToClipboard('${data.properties.pdb_id}')">Copy</button></li>
+                    </ul>
+                    <p><strong>Lipinski’s Rule Violations:</strong></p>
+                    <ul>${data.lipinski_violations.length > 0 ? data.lipinski_violations.map(v => `<li>${v}</li>`).join('') : '<li>None</li>'}</ul>
+                    <p><strong>Optimization Suggestions:</strong></p>
+                    <ul>${data.suggestions.map(s => `<li>${s}</li>`).join('')}</ul>
+                    <p><strong>Similar Compounds with Better IC50:</strong></p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>SMILES</th>
+                                <th>PDB ID</th>
+                                <th>IC50 (nM)</th>
+                                <th>Similarity</th>
+                                <th>Molecular Mass</th>
+                                <th>LogP</th>
+                                <th>Solubility</th>
+                                <th>HBD</th>
+                                <th>HBA</th>
+                                <th>PSA</th>
+                                <th>3D View</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.similarCompounds.map(c => `
+                                <tr>
+                                    <td>${c.smiles} <button class="copy-btn" onclick="copyToClipboard('${c.smiles}')">Copy</button></td>
+                                    <td>${c.pdb_id} <button class="copy-btn" onclick="copyToClipboard('${c.pdb_id}')">Copy</button></td>
+                                    <td>${c.ic50_value}</td>
+                                    <td>${c.similarity.toFixed(2)}</td>
+                                    <td>${c.molecular_mass}</td>
+                                    <td>${c.logp}</td>
+                                    <td>${c.solubility}</td>
+                                    <td>${c.hbd}</td>
+                                    <td>${c.hba}</td>
+                                    <td>${c.psa}</td>
+                                    <td><button onclick="view3DStructure('/uploads/${c.sdf_file}')">View</button></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+                view3DStructure('/uploads/' + data.properties.sdf_file);
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function view3DBySmiles() {
+            const smiles = document.getElementById('smilesInput').value.trim();
+            if (!smiles) {
+                showError('Please enter a SMILES string');
+                return;
+            }
+            if (!stage3D) {
+                stage3D = new NGL.Stage('viewer3D', { backgroundColor: 'white' });
+            }
+            stage3D.removeAllComponents();
+            fetch('/api/optimize', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ leadSmiles: smiles, leadIc50: 0, allCompounds: [] })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to fetch SDF');
+                return response.json();
+            })
+            .then(data => {
+                const sdfUrl = '/uploads/' + data.properties.sdf_file;
+                console.log('Loading SDF from:', sdfUrl);
+                stage3D.loadFile(sdfUrl, { ext: 'sdf' }).then(function(component) {
+                    component.addRepresentation('ball+stick');
+                    component.autoView();
+                    if (spinning) stage3D.animationControls.play({ direction: 'spin' });
+                }).catch(err => showError('Failed to load SDF: ' + err.message));
+            })
+            .catch(err => showError('Failed to fetch SDF: ' + err.message));
+        }
+    </script>
+</body>
+</html>
